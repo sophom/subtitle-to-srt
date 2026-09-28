@@ -1,0 +1,262 @@
+#+TITLE: subtitle-to-srt.py
+#+SUBTITLE: Turn the bitmap subtitles in your ripped MKVs into SRT files
+
+* Overview
+
+=subtitle-to-srt.py= converts the bitmap subtitle tracks of an MKV file into
+an SRT file. It supports the two subtitle formats that appear on HD DVD and
+Blu-ray discs:
+
+- =dvd_subtitle= (VobSub) — HD DVD rips
+- =hdmv_pgs_subtitle= (PGS) — Blu-ray rips
+
+The subtitles on these discs are images, not text, so the script renders each
+subtitle event to a PNG, crops it to the text, and OCRs it with tesseract.
+Only the subtitle streams are read — your video is never decoded.
+
+* Requirements
+
+- =python3= with the Pillow package
+- =ffmpeg= / =ffprobe=
+- =mkvtoolnix= (for =mkvextract=)
+- =tesseract= with a language pack (traineddata) for each language you want
+  to OCR. Check what you have with:
+
+  #+begin_example
+  tesseract --list-langs
+  #+end_example
+
+  Install missing languages through your distro, e.g.
+  =tesseract-ocr-spa= for Spanish, =tesseract-ocr-deu= for German. The
+  language the script OCRs with defaults to the subtitle track's language
+  tag, so a Spanish track needs the Spanish pack.
+
+The script is executable; run it as =./subtitle-to-srt.py ...=.
+
+* Quick start
+
+List the subtitle tracks of a file:
+
+#+begin_example
+$ ./subtitle-to-srt.py "The Score.mkv" -L
+stream  language  codec          duration
+#2    eng      dvd_subtitle  00:08:57
+#3    fre      dvd_subtitle  00:08:57
+#+end_example
+
+Extract one of them by stream index:
+
+#+begin_example
+$ ./subtitle-to-srt.py "The Score.mkv" 2
+#+end_example
+
+The result is written next to the MKV, named after the file and the 2-letter
+language code of the extracted track: =The Score.en.srt=.
+
+Or select by language instead of index:
+
+#+begin_example
+$ ./subtitle-to-srt.py "The Score.mkv" -l fre
+#+end_example
+
+If you give neither an index nor =-l=, the script picks a track for you (the
+default-flagged subtitle track, else the first English one, else the first
+subtitle track) and tells you which.
+
+Filenames with spaces or apostrophes must be quoted.
+
+* Choosing a track
+
+HD DVD rips often carry several subtitle tracks per language — one set for
+the feature and one or more for the extras. The =DURATION= column in the
+=-L= listing distinguishes them (it is the length of that track's subtitles,
+not the file length):
+
+#+begin_example
+$ ./subtitle-to-srt.py "Pan's Labyrinth (2006).mkv" -L
+stream  language  codec          duration
+#4    eng      dvd_subtitle  01:51:34
+#5    eng      dvd_subtitle  01:51:34
+#6    eng      dvd_subtitle  01:51:20
+#7    eng      dvd_subtitle  01:51:20
+#8    eng      dvd_subtitle  01:51:20
+#9    eng      dvd_subtitle  01:51:20
+#10   spa      dvd_subtitle  01:50:35
+#11   spa      dvd_subtitle  01:50:35
+#+end_example
+
+Here #4/#5 run the full 01:51:34 (the feature); #6–#9 stop at 01:51:20
+(extras). Pick by index, or use =-l= to take the first matching track:
+
+| Option              | Meaning                                                                       |
+|---------------------+-------------------------------------------------------------------------------|
+| 4 = positional      | extract subtitle stream #4                                                    |
+| =-l eng= / =-l spa= | extract the first subtitle track with that language (2- or 3-letter ISO code) |
+| =4 -l spa=          | both given: the stream index wins                                             |
+| (neither)           | default-flagged track, else first English, else first subtitle track          |
+| =-1=                | extract the first track of *each* language to a separate SRT                  |
+#+TBLFM: $1=4= (positional)
+
+=-1= cannot be combined with a stream index, =-l=, or =--tesseract-language=.
+Tagged English is preferred; if the file has no tagged English track, the
+first untagged track is assumed to be English (with a warning).
+
+* Options
+
+| Option                      | Description                                                                                                                        |
+|-----------------------------+------------------------------------------------------------------------------------------------------------------------------------|
+| =-o out.srt=                | output path (default =<mkv name>.<lang>.srt=); in directory mode: the directory that receives each SRT                             |
+| =-l lang=                   | extract the first subtitle stream matching LANG                                                                                    |
+| =-1=                        | first subtitle stream per language, one SRT each                                                                                   |
+| =--tesseract-language lang= | force the OCR language (default: the track's language tag)                                                                         |
+| =--learn L1,L2=             | produce a bilingual learning SRT (see below)                                                                                       |
+| =-j N=                      | tesseract parallelism (default: physical cores minus 1, minimum 1)                                                                 |
+| =-f=                        | overwrite existing output files (default: skip them)                                                                               |
+| =-y=                        | directory mode: skip the yes/no prompt                                                                                             |
+| =--type criteria=           | directory mode: only process files matching ALL comma-separated criteria (AND, case-insensitive): video codec prefix, subtitle codec, and/or video resolution |
+| =-L=, =--list=              | list subtitle tracks (index, language, codec, duration) and exit                                                                   |
+| =--workdir DIR=             | base directory for temporary work (must already exist; default: the system temp dir)                                               |
+| =--debug=                   | keep the temporary workdir after the run                                                                                           |
+| =-h=, =--help=              | show the usage text                                                                                                                |
+
+* Directory mode
+
+Pass a directory instead of a file to process every MKV under it. The script
+recursively finds =.mkv= files (hidden directories are skipped), lists them
+with the codec of their primary video stream, asks for confirmation, and
+processes each one with the same track selection and options:
+
+#+begin_example
+$ ./subtitle-to-srt.py /path/to/movies 7 -y
+found 3 mkv file(s):
+  vc1    /path/to/movies/Atonement (2007).mkv
+  vc1    /path/to/movies/Darkman (1990).mkv
+   mpeg2video  /path/to/movies/The Score.mkv
+Processing file 1/3 : /path/to/movies/Atonement (2007).mkv
+...
+File Atonement (2007).mkv finished in 1:42. Wrote 954 subtitles in 1 stream for a video with a duration of 01:52:40
+...
+done: 3 ok, 0 error(s) of 3 file(s)
+processed 3 file(s) in 5:03
+#+end_example
+
+- A stream index or =-l= applies to every file; a file without that subtitle
+  track is reported and skipped.
+- =-o OUTDIR= is the directory that receives each SRT (created if missing);
+  without it, each SRT is written next to its MKV.
+- =--type criteria= limits the list; all comma-separated criteria must
+  match (AND, case-insensitive): a video codec prefix (e.g. =vc1=, =mpeg2=,
+  =h264=), a subtitle codec (=dvd_subtitle=/=dvd= or
+  =hdmv_pgs_subtitle=/=pgs=: the file needs at least one such subtitle
+  stream), and/or a video resolution (=480=, =576p=, =1080=, =2160p=; the
+  =p= is optional, so =480= matches 480i and 480p alike). Useful when a
+  folder mixes HD DVD (VC-1) and Blu-ray (H.264) rips, or 480p and 1080p
+  masters.
+- A failed file is listed after the =done:= line, one line each:
+  =  <full path>: error: <message>= (per-track errors joined with =;=).
+- A subtitle track that yields no text at all (all events blank) is an
+  error (=no subtitle text: all N events blank=); no SRT is written for it.
+- Exit status is 1 if any file failed.
+
+* Bilingual learning mode (=--learn=)
+
+=--learn L1,L2= produces a single SRT pairing the two languages entry by
+entry, for language study. L1 is the top text, L2 the bottom text, and L2
+provides the timing for matched entries:
+
+#+begin_example
+12
+00:01:37,500 --> 00:01:41,200
+Top line in L1
+---
+Bottom line in L2
+#+end_example
+
+Entries that match only one language show the other side as an empty half.
+Two ways to run it:
+
+#+begin_example
+# From one MKV: one track per language is extracted (the default-flagged
+# track, else the longest-running one for that language)
+$ ./subtitle-to-srt.py --learn es,en "Pan's Labyrinth (2006).mkv"
+# -> Pan's Labyrinth (2006).es-en.srt
+
+# From two existing SRTs, in L1,L2 order
+$ ./subtitle-to-srt.py --learn es,en movie.es.srt movie.en.srt
+# -> movie.es-en.srt
+#+end_example
+
+=-l=, =-1=, =-L=, =--tesseract-language=, and a stream index cannot be
+combined with =--learn=.
+
+* Output and timing
+
+- Each entry's start time is the subtitle event's own timestamp. Its end time
+  is start plus the subtitle's actual on-screen duration (read from the
+  track), so an entry ends when its subtitle disappears — not when the next
+  one starts.
+- VobSub: the rare empty event is kept as a blank entry, as is an event
+  that fails to decode (a corrupt SPU packet): it renders blank and its
+  entry ends when the next event starts.
+- PGS: blank pages (no text) are omitted, and the run reports how many were
+  skipped.
+- English output: tesseract's characteristic misread of =I am= as =lam= is
+  normalized back to =I am= (word boundary).
+- An existing output file is skipped with a message; pass =-f= to overwrite.
+- The OCR phase prints progress with an ETA:
+  =OCR: 412/998 (41%)  ETA 0:58=.
+- Each processed MKV ends with one summary line, handy for extracting
+  statistics with a single grep (=grep '^File .* finished in'=):
+  =File The Score.mkv finished in 0:13. Wrote 150 subtitles in 1 stream
+  for a video with a duration of 00:08:57=. In =-1= mode the count is the
+  total across all SRTs written for the file (e.g. "in 2 streams");
+  =--learn= reports "in 2 streams in one .srt file".
+
+* How it works
+
+1. =mkvextract= pulls the track out of the MKV (VobSub =.sub=/.idx=,
+   PGS =.sup=).
+2. =ffmpeg= renders every subtitle event to a full-frame PNG. PGS pages are
+   rendered at their native size; VobSub is rendered at the video size.
+3. Each frame is cropped to the text's bounding box, placed on a black
+   background (so white fonts' black outlines don't confuse OCR), and
+   thresholded.
+4. =tesseract= (page mode 6) OCRs the crops in parallel chunks, at
+   =nice= 19 so the run yields CPU to anything else on the machine.
+5. The SRT is assembled from the event start times and durations.
+
+One quirk worth knowing: a VobSub track stores the resolution it was
+authored at, which can differ from the video's. If the video-size render
+leaves most events blank (e.g. 1080p-authored subtitles on a 480p video),
+the script re-renders at a list of common authoring canvases (1920x1080,
+1280x720, 1440x1080, 3840x2160, 720x576, 1280x960) and uses the first one
+that leaves at most a quarter of the events blank, reporting the choice:
+
+#+begin_example
+subtitle canvas is 1920x1080 (video is 720x480)
+#+end_example
+
+* Troubleshooting
+
+- ="stream N has no language tag; pass --tesseract-language LANG"= — the
+  track has no language tag; force the OCR language.
+- ="tesseract has no language traineddata for: X"= — install the tesseract
+  language pack for that language.
+- ="no subtitle track with language X"= — check =-L=; the tag may use a
+  different code, or the track you want has no tag.
+- ="unsupported subtitle codec"= — only =dvd_subtitle= and
+  =hdmv_pgs_subtitle= are supported. MKVs that carry text-based subtitles
+  (=srt=, =ass=) have nothing to OCR; extract those directly instead.
+- ="warning: subtitles were mostly blank at every canvas size"= — the
+  authoring canvas isn't in the retry list; the run used the canvas with the
+  fewest blanks. Inspect the intermediate PNGs with =--debug=.
+- ="no subtitle text: all N events blank"= — the track rendered but every
+  event came out blank; no SRT is written for the file. Inspect the
+  intermediate PNGs with =--debug=.
+- =--debug= keeps the temporary workdir (rendered frames, crops, per-crop OCR
+  text) so you can see exactly what was OCR'd; =--workdir= moves it to a
+  disk with room, since a feature-length track produces thousands of PNGs.
+- Performance: expect roughly 1.5 minutes per ~1000-event track. Keep =-j=
+  modest — on some machines (e.g. an 8-core/16-thread box), running more
+  than about 8 tesseract jobs in parallel makes each of them dramatically
+  slower due to CPU contention.
