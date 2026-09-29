@@ -169,6 +169,7 @@ def tag_to_2(tag: str) -> str:
 TESSERACT_LANG_ALIASES = {
     "fre": "fra",
     "fr": "fra",
+    "ger": "deu",
 }
 
 
