@@ -3,16 +3,31 @@
 
 * Overview
 
-=subtitle-to-srt.py= converts the bitmap subtitle tracks of an MKV file into
-an SRT file. It supports the two subtitle formats that appear on HD DVD and
+=subtitle-to-srt.py= converts the bitmap subtitle tracks of an MKV
+file into an SRT file. The intent is to make life easy for the user,
+so it supports recursive search and srt generation from mkv files. It
+supports the two subtitle formats that appear on DVDs, HDDVDs and
 Blu-ray discs:
 
-- =dvd_subtitle= (VobSub) — HD DVD rips
+- =dvd_subtitle= (VobSub) — HDDVD and DVD rips
 - =hdmv_pgs_subtitle= (PGS) — Blu-ray rips
 
 The subtitles on these discs are images, not text, so the script renders each
 subtitle event to a PNG, crops it to the text, and OCRs it with tesseract.
 Only the subtitle streams are read — your video is never decoded.
+
+This is primarily written for HDDVD rips where various players have
+trouble displaying the DVDSUB streams from them but it also works on
+DVDs and blu-rays... the later two haven't been tested as much as
+HDDVD mkvs. This script started as a quick and dirty bash script but
+it evolved into this. I'm releasing it here in case others have use
+for it.
+
+One of my favorite features is --learn which creates subtitles with
+two languages displayed simultaneously. I did this to help me get
+comfortable with a language I'm learning while watching movies. I set
+it so that the language I'm learning is on top while the base
+language, one I'm fluent in, is on the bottom.
 
 * Requirements
 
@@ -35,6 +50,21 @@ The script is executable; run it as =./subtitle-to-srt.py ...=.
 
 * Quick start
 
+To extract the default subtitle track and create an srt file from it
+
+#+begin_example
+$ ./subtitle-to-srt.py "The Score.mkv"
+#+end_example
+
+This will create =The Score.en.srt= on the side of the source mkv file
+
+To recursively find every single mkv file and create srt files for all of them:
+
+#+begin_example
+$ ./subtitle-to-srt.py /path/to/mkvs
+#+end_example
+
+
 List the subtitle tracks of a file:
 
 #+begin_example
@@ -51,7 +81,9 @@ $ ./subtitle-to-srt.py "The Score.mkv" 2
 #+end_example
 
 The result is written next to the MKV, named after the file and the 2-letter
-language code of the extracted track: =The Score.en.srt=.
+language code of the extracted track: =The Score.en.srt=. If the track's
+language tag is a legacy alias (e.g. =ger=), the original tag is kept in the
+file name instead: =The Phantom of the Opera.ger.srt=.
 
 Or select by language instead of index:
 
