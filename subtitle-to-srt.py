@@ -138,6 +138,7 @@ ISO639_1 = {
 
 LANGUAGE_ALIASES = {
     "fre": "fra",
+    "ger": "deu",
 }
 
 
