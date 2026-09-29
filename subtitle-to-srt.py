@@ -1254,6 +1254,11 @@ def first_per_language(streams: list[dict]) -> tuple[list[int], int | None]:
 def default_out(file: str, s_lang: str, ocr_lang: str) -> str:
     """Build the default output path <name>.<lang>.srt.
 
+    The language segment is the 2-letter ISO 639-1 code of the stream tag,
+    except when the tag is a known legacy alias (e.g. "ger"), where the
+    original tag is kept so players match it; untagged streams fall back
+    to the OCR language code.
+
     Args:
         file: Source MKV path.
         s_lang: Stream language tag, or ""/"unknown" if untagged.
@@ -1262,11 +1267,12 @@ def default_out(file: str, s_lang: str, ocr_lang: str) -> str:
     Returns:
         The default output SRT path.
     """
-    fname_lang = s_lang
-    if not fname_lang or fname_lang == "unknown":
-        fname_lang = ocr_lang
+    if s_lang and s_lang != "unknown":
+        lang = s_lang if normalize_lang(s_lang) != s_lang else tag_to_2(s_lang)
+    else:
+        lang = tag_to_2(ocr_lang)
     base = file[:-4] if file.endswith(".mkv") else file
-    return f"{base}.{tag_to_2(fname_lang)}.srt"
+    return f"{base}.{lang}.srt"
 
 
 def output_for_track(file: str, streams: list[dict], stream_i: int,
