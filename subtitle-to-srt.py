@@ -40,27 +40,41 @@ from typing import NamedTuple, NoReturn
 from PIL import Image
 
 USAGE = """\
-Usage: subtitle-to-srt.py <file.mkv> [stream-index | -1] [-l lang] [-o out.srt] [--tesseract-language lang] [-f] [--workdir DIR] [--debug]
-       subtitle-to-srt.py <dir> [stream-index | -1] [-l lang] [--type criteria] [-y] [-o OUTDIR] [--tesseract-language lang] [-f] [--workdir DIR] [--debug]
+Usage: subtitle-to-srt.py <path>... [-s streams | -1] [-l lang] [-o out] [--tesseract-language lang] [-f] [--type criteria] [-y] [--workdir DIR] [--debug]
        subtitle-to-srt.py <file.mkv> --learn LANG1,LANG2 [-o out.srt] [-f] [--workdir DIR] [--debug]
        subtitle-to-srt.py --learn LANG1,LANG2 <file1.srt> <file2.srt> [-o out.srt] [-f]
 
+<path> is one or more .mkv files and/or directories, in any combination;
+every input is processed in the order given.
+
 Converts a VobSub or PGS subtitle track of an MKV to an SRT file.
 
-Pass a directory instead of a file to recursively find .mkv files, list them
-with the codec of their primary (first) video stream, and process every file
-after a yes/no prompt (-y skips the prompt). In directory mode: -o selects
-the directory that receives each SRT file; a stream index is applied to every
-file (a file without that subtitle track is reported and skipped); --type
-limits the file list by comma-separated criteria, all of which must match
+Pass one or more .mkv files and/or directories, in any combination; every
+input is processed in the order given. Directories are scanned recursively
+for .mkv files (hidden directories are skipped); the files are listed with
+the codec of their primary (first) video stream, and when at least one
+input is a directory a yes/no prompt is shown before processing (-y skips
+it). With more than one input, or a directory, -o selects the directory
+that receives each SRT file (an -o ending in .srt is rejected
+immediately); without -o each SRT goes next to its MKV. A missing input, or
+an input that is not an .mkv file, is reported in a final summary after the
+remaining files have been processed. The -s stream indices are applied to
+every file (a file without one of them is reported and the rest are
+processed); --type
+limits the file list (explicit files and files found in directories) by
+comma-separated criteria, all of which must match
 (AND): a primary video codec prefix (e.g. vc1, mpeg2, h264), a subtitle
 codec (dvd_subtitle or dvd, hdmv_pgs_subtitle or pgs), and/or a video
 resolution (480, 576p, 1080, 2160p).
 
-Pick the track with a stream index and/or -l lang (a stream index wins if both):
+Pick the track(s) with -s streams and/or -l lang (-s wins if both):
 
-  stream-index  global stream index as shown by -L/--list (#4, #5, ...).
-                If neither this nor -l is given, uses the track marked default,
+  -s streams    one or more comma-separated global stream indices as shown
+                by -L/--list (#4, #5, ...), e.g. -s 7 or -s 7,12.
+                Multiple -s values write one SRT per stream named
+                <name>.<index>.<lang>.srt (the language stays right before
+                .srt); -o then selects the directory that receives them.
+                If neither -s nor -l is given, uses the track marked default,
                 else the first English (eng/en) subtitle track, else the first
                 subtitle track.
   -l lang       extract the first subtitle stream whose language matches LANG
@@ -68,9 +82,9 @@ Pick the track with a stream index and/or -l lang (a stream index wins if both):
   -1            extract the first subtitle stream for each language to a
                 separate SRT file. Tagged English is preferred; if no tagged
                 English exists, the first untagged stream is assumed English.
-                Cannot be combined with stream-index, -l, or
+                Cannot be combined with -s, -l, or
                 --tesseract-language; -o (output directory) is only allowed
-                in directory mode.
+                with multiple inputs or a directory.
   --tesseract-language lang
                  force the language tesseract OCRs with (default: the selected
                  track's language tag).
@@ -80,21 +94,26 @@ Pick the track with a stream index and/or -l lang (a stream index wins if both):
                  two existing SRT files in L1,L2 order.
                  Default output: <name>.L1-L2.srt.
   -o out.srt    output path (default: <mkv file name>.<lang>.srt, where <lang>
-                 is the 2-letter ISO code of the extracted track); in
-                 directory mode: the directory that receives each SRT file
+                is the 2-letter ISO code of the extracted track); with
+                multiple -s values, multiple inputs, or a directory: the
+                directory that receives each SRT file (an -o ending in .srt
+                is rejected immediately in the latter cases)
   -f            overwrite existing .srt output files (default: skip them)
   -j N          tesseract parallelism (default: physical cores - 1, min 1)
-  -y            directory mode only: skip the yes/no prompt and process all
+  -y            skip the yes/no prompt (shown when at least one input is a directory)
+                and process all
                  the listed files
   --type criteria
-              directory mode only: only process files matching ALL
+              only process files matching ALL
               comma-separated criteria (AND, case-insensitive): a primary
               video codec prefix (e.g. vc1, mpeg2, h264), a subtitle codec
               (dvd_subtitle/dvd or hdmv_pgs_subtitle/pgs: the file needs
               at least one such subtitle stream), and/or a video
               resolution (e.g. 480, 576p, 1080, 2160p; the "p" is
-              optional and ignored, so 480 matches both 480i and 480p)
-  -L, --list    list subtitle tracks (index, language, codec, duration) and exit
+              optional and ignored, so 480 matches both 480i and 480p).
+              Applies to explicit files and to files found in directories.
+  -L, --list    list subtitle tracks (index, language, codec, duration) and
+                exit (single file only)
   --workdir DIR   base directory for temporary workdirs; must already exist
                   (default: system temp dir, usually /tmp)
   --debug         keep the temporary workdir(s) after the script exits
@@ -214,8 +233,8 @@ def fail(msg: str, batch: bool) -> NoReturn:
 class Args(NamedTuple):
     """Parsed command-line options, mirroring the bash script's variables."""
 
-    file: str
-    stream: str
+    paths: list[str]
+    sel_streams: str
     out: str
     sel_lang: str
     ocr_lang: str
@@ -264,7 +283,8 @@ def parse_args(argv: list[str]) -> Args:
     Returns:
         An Args with every option filled in.
     """
-    file = stream = out = sel_lang = ocr_lang = ""
+    paths: list[str] = []
+    sel_streams = out = sel_lang = ocr_lang = ""
     par = str(max(physical_core_count() - 1, 1))
     listing = False
     first_each = False
@@ -286,6 +306,13 @@ def parse_args(argv: list[str]) -> Args:
             if i + 1 >= len(argv):
                 die("-l needs an argument")
             sel_lang = argv[i + 1]
+            i += 2
+        elif a == "-s":
+            if i + 1 >= len(argv):
+                die("-s needs an argument")
+            sel_streams = argv[i + 1]
+            if not sel_streams:
+                die("-s needs a non-empty argument")
             i += 2
         elif a == "-j":
             if i + 1 >= len(argv):
@@ -335,20 +362,21 @@ def parse_args(argv: list[str]) -> Args:
         elif a.startswith("-"):
             die(f"unknown option: {a} (see --help)")
         else:
-            if not file:
-                file = a
-            elif not stream:
-                stream = a
-            else:
+            # Without --learn, any number of files/directories is accepted
+            # (processed in order); with --learn, at most two (one MKV, or
+            # two SRT files).
+            if learn and len(paths) >= 2:
                 die(f"unexpected argument: {a}")
+            paths.append(a)
             i += 1
-    if not file:
+    if not paths:
         sys.stderr.write(USAGE)
         sys.exit(1)
     if workdir and not os.path.isdir(workdir):
         die(f"--workdir is not a directory: {workdir}")
-    return Args(file, stream, out, sel_lang, ocr_lang, par, listing,
-                first_each, force, learn, workdir, debug, assume_yes, vtype)
+    return Args(paths, sel_streams, out, sel_lang, ocr_lang, par,
+                listing, first_each, force, learn, workdir, debug,
+                assume_yes, vtype)
 
 
 def lang_to_2(code: str) -> str:
@@ -483,11 +511,15 @@ def make_workdir(workdir: str = "") -> str:
 
 def main() -> None:
     """Entry point: parse the arguments and dispatch to the right pipeline."""
-    (file, stream, out, sel_lang, ocr_lang, par, listing, first_each,
-     force, learn, workdir, debug, assume_yes, vtype) = parse_args(
+    (paths, sel_streams, out, sel_lang, ocr_lang, par, listing,
+     first_each, force, learn, workdir, debug, assume_yes, vtype) = parse_args(
         sys.argv[1:])
+    file = paths[0]
+    stream = paths[1] if len(paths) > 1 else ""
 
     if learn:
+        if len(paths) > 2:
+            die(f"unexpected argument: {paths[2]}")
         if listing:
             die("--learn cannot be combined with -L/--list")
         if first_each:
@@ -496,6 +528,8 @@ def main() -> None:
             die(f"--learn cannot be combined with -l: {sel_lang}")
         if ocr_lang:
             die("--learn cannot be combined with --tesseract-language")
+        if sel_streams:
+            die(f"--learn cannot be combined with -s: {sel_streams}")
         if not (par.isdigit() and int(par) >= 1):
             die(f"-j must be a positive number, got: {par}")
         par = int(par)
@@ -565,8 +599,16 @@ def main() -> None:
         die("with --learn the first positional argument must be a .mkv file, "
             "or give two .srt files")
 
+    if len(paths) > 1:
+        if listing:
+            die("-L/--list cannot be combined with "
+                "multiple files or directories")
+        process_multiple(paths, sel_streams, out, sel_lang, ocr_lang, par,
+                         first_each, force, workdir, debug, assume_yes,
+                         vtype)
+
     if os.path.isdir(file):
-        process_directory(file, stream, out, sel_lang, ocr_lang, par,
+        process_directory(file, sel_streams, out, sel_lang, ocr_lang, par,
                           listing, first_each, force, workdir, debug,
                           assume_yes, vtype)
 
@@ -582,8 +624,8 @@ def main() -> None:
     par = int(par)
 
     if first_each:
-        if stream:
-            die(f"-1 cannot be combined with a stream index: {stream}")
+        if sel_streams:
+            die(f"-1 cannot be combined with -s: {sel_streams}")
         if sel_lang:
             die(f"-1 cannot be combined with -l: {sel_lang}")
         if out:
@@ -608,20 +650,44 @@ def main() -> None:
                              video_duration_hms(probe), n_done))
         sys.exit(0)
 
-    stream, stream_i = select_stream(streams, sel_lang, stream, file,
-                                     batch=False)
-
-    if not out:
-        out = output_for_track(file, streams, stream_i, ocr_lang, batch=False)
-        if not force and os.path.isfile(out):
-            print(f"skipping {out}: file already exists (use -f to overwrite)")
-            sys.exit(0)
-
+    if sel_streams:
+        indices = parse_stream_list(sel_streams, batch=False)
+    else:
+        _sel, stream_i = select_stream(streams, sel_lang, "", file,
+                                       batch=False)
+        indices = [stream_i]
+    multiple = len(indices) > 1
+    if multiple and out:
+        if os.path.exists(out) and not os.path.isdir(out):
+            die(f"-o is not a directory: {out}")
+        os.makedirs(out, exist_ok=True)
     w, h = video_size(file)
-    entries = process_track(file, stream, stream_i, streams, ocr_lang, out,
-                            par, w, h, batch=False, workdir=workdir,
-                            debug=debug)
-    print(file_done_line(file, t0, entries, video_duration_hms(probe), 1))
+    entries = 0
+    n_done = 0
+    for stream_i in indices:
+        track_out = output_for_track(file, streams, stream_i, ocr_lang,
+                                     batch=False,
+                                     index=stream_i if multiple else None)
+        if out and multiple:
+            track_out = os.path.join(out, os.path.basename(track_out))
+            if not force and os.path.isfile(track_out):
+                print(f"skipping {track_out}: file already exists "
+                      f"(use -f to overwrite)")
+                continue
+        elif out:
+            track_out = out
+        elif not force and os.path.isfile(track_out):
+            print(f"skipping {track_out}: file already exists "
+                  f"(use -f to overwrite)")
+            if not multiple:
+                sys.exit(0)
+            continue
+        entries += process_track(file, str(stream_i), stream_i, streams,
+                                 ocr_lang, track_out, par, w, h,
+                                 batch=False, workdir=workdir, debug=debug)
+        n_done += 1
+    print(file_done_line(file, t0, entries, video_duration_hms(probe),
+                         n_done))
 
 
 def idx_starts(work: str) -> list[int] | None:
@@ -1272,18 +1338,22 @@ def first_per_language(streams: list[dict]) -> tuple[list[int], int | None]:
     return sorted(selected), warning
 
 
-def default_out(file: str, s_lang: str, ocr_lang: str) -> str:
+def default_out(file: str, s_lang: str, ocr_lang: str,
+                index: int | None = None) -> str:
     """Build the default output path <name>.<lang>.srt.
 
     The language segment is the 2-letter ISO 639-1 code of the stream tag,
     except when the tag is a known legacy alias (e.g. "ger"), where the
     original tag is kept so players match it; untagged streams fall back
-    to the OCR language code.
+    to the OCR language code. With a stream index, the index is inserted
+    between the file name and the language (<name>.<index>.<lang>.srt) so
+    the language stays right before .srt.
 
     Args:
         file: Source MKV path.
         s_lang: Stream language tag, or ""/"unknown" if untagged.
         ocr_lang: Language to fall back to when the stream is untagged.
+        index: Stream index to include in the name, or None.
 
     Returns:
         The default output SRT path.
@@ -1293,12 +1363,15 @@ def default_out(file: str, s_lang: str, ocr_lang: str) -> str:
     else:
         lang = tag_to_2(ocr_lang)
     base = file[:-4] if file.endswith(".mkv") else file
+    if index is not None:
+        return f"{base}.{index}.{lang}.srt"
     return f"{base}.{lang}.srt"
 
 
 def output_for_track(file: str, streams: list[dict], stream_i: int,
-                     ocr_lang: str, batch: bool = False,
-                     assume_english: bool = False) -> str:
+                      ocr_lang: str, batch: bool = False,
+                      assume_english: bool = False,
+                      index: int | None = None) -> str:
     """Validate a subtitle stream and compute its default output path.
 
     Args:
@@ -1308,6 +1381,7 @@ def output_for_track(file: str, streams: list[dict], stream_i: int,
         ocr_lang: Forced tesseract language; "" to use the track's tag.
         batch: Raise TrackError on failure instead of exiting.
         assume_english: Treat an untagged stream as English.
+        index: Stream index to include in the name, or None.
 
     Returns:
         The output SRT path.
@@ -1331,7 +1405,7 @@ def output_for_track(file: str, streams: list[dict], stream_i: int,
                  f"pass --tesseract-language LANG", batch)
         else:
             ocr_lang = s_lang
-    return default_out(file, s_lang, tesseract_lang(ocr_lang))
+    return default_out(file, s_lang, tesseract_lang(ocr_lang), index)
 
 
 _SRT_TS_RE = re.compile(r"(\d{1,2}):(\d{1,2}):(\d{1,2})[,.](\d{1,3})")
@@ -2047,18 +2121,36 @@ def type_matches(vtype: str, streams: list[dict]) -> bool:
     return True
 
 
+def parse_stream_list(value: str, batch: bool) -> list[int]:
+    """Split a -s value into a list of stream indices.
+
+    Args:
+        value: Comma-separated stream indices, e.g. "7" or "7,12".
+        batch: Raise TrackError instead of exiting on a bad value.
+
+    Returns:
+        The stream indices as ints, in the given order.
+    """
+    indices = []
+    for part in value.split(","):
+        if not part.isdigit():
+            fail(f"invalid stream index in -s {value}: {part!r}", batch)
+        indices.append(int(part))
+    return indices
+
+
 def select_stream(streams: list[dict], sel_lang: str, stream: str,
                   file: str, batch: bool) -> tuple[str, int]:
     """Pick a subtitle stream index.
 
-    A positional stream index wins over -l lang. Without either, uses the
+    The given stream index wins over -l lang. Without either, uses the
     track marked default, else the first English (eng/en) subtitle track,
     else the first subtitle track.
 
     Args:
         streams: ffprobe stream dicts.
         sel_lang: Value of -l, or "".
-        stream: Positional stream index, or "".
+        stream: Stream index, or "".
         file: MKV path, used in messages.
         batch: Raise TrackError instead of exiting when nothing matches.
 
@@ -2175,16 +2267,16 @@ def process_first_each(file: str, streams: list[dict], par: int,
 
 
 def process_file(path: str, streams: list[dict], video_dur: str,
-                 stream: str, sel_lang: str, first_each: bool, out_dir: str,
-                 ocr_lang: str, par: int, force: bool, workdir: str,
-                  debug: bool) -> list[str]:
+                  sel_streams: str, sel_lang: str, first_each: bool,
+                  out_dir: str, ocr_lang: str, par: int, force: bool,
+                  workdir: str, debug: bool) -> list[str]:
     """Process the subtitle tracks of one MKV file in directory mode.
 
     Args:
         path: MKV path.
         streams: ffprobe stream dicts (already probed).
         video_dur: Video duration as HH:MM:SS, from the probe.
-        stream: Positional stream index to apply, or "".
+        sel_streams: Comma-separated -s stream indices to apply, or "".
         sel_lang: Value of -l, or "".
         first_each: Use -1 (first stream per language) mode.
         out_dir: Output directory for SRT files, or "".
@@ -2206,32 +2298,55 @@ def process_file(path: str, streams: list[dict], video_dur: str,
             if not failures:
                 print(file_done_line(path, t0, entries, video_dur, n_done))
             return failures
-        stream, stream_i = select_stream(streams, sel_lang, stream, path,
-                                         batch=True)
-        out = output_for_track(path, streams, stream_i, ocr_lang, batch=True)
+        if sel_streams:
+            indices = parse_stream_list(sel_streams, batch=True)
+        else:
+            _sel, stream_i = select_stream(streams, sel_lang, "", path,
+                                           batch=True)
+            indices = [stream_i]
     except Exception as e:
         print(f"error: {e}", file=sys.stderr)
         return [str(e)]
-    if out_dir:
-        out = os.path.join(out_dir, os.path.basename(out))
-    if not force and os.path.isfile(out):
-        print(f"skipping {out}: file already exists (use -f to overwrite)")
-        return []
-    w, h = video_size(path)
-    try:
-        entries = process_track(path, stream, stream_i, streams, ocr_lang,
-                                out, par, w, h, batch=True, workdir=workdir,
-                                debug=debug)
-    except Exception as e:
-        print(f"error: track {stream_i} ({stream_lang(streams, stream_i)}): "
-              f"{e}", file=sys.stderr)
-        return [f"track {stream_i} ({stream_lang(streams, stream_i)}): {e}"]
-    print(file_done_line(path, t0, entries, video_dur, 1))
-    return []
+    multiple = len(indices) > 1
+    failures: list[str] = []
+    entries = 0
+    n_done = 0
+    w = h = 0
+    sized = False
+    for stream_i in indices:
+        try:
+            out = output_for_track(path, streams, stream_i, ocr_lang,
+                                   batch=True,
+                                   index=stream_i if multiple else None)
+        except Exception as e:
+            print(f"error: {e}", file=sys.stderr)
+            failures.append(str(e))
+            continue
+        if out_dir:
+            out = os.path.join(out_dir, os.path.basename(out))
+        if not force and os.path.isfile(out):
+            print(f"skipping {out}: file already exists (use -f to overwrite)")
+            continue
+        if not sized:
+            w, h = video_size(path)
+            sized = True
+        try:
+            entries += process_track(path, str(stream_i), stream_i, streams,
+                                     ocr_lang, out, par, w, h, batch=True,
+                                     workdir=workdir, debug=debug)
+            n_done += 1
+        except Exception as e:
+            print(f"error: track {stream_i} ({stream_lang(streams, stream_i)}): "
+                  f"{e}", file=sys.stderr)
+            failures.append(
+                f"track {stream_i} ({stream_lang(streams, stream_i)}): {e}")
+    if n_done and not failures:
+        print(file_done_line(path, t0, entries, video_dur, n_done))
+    return failures
 
 
-def process_directory(dirpath: str, stream: str, out: str, sel_lang: str,
-                      ocr_lang: str, par: str, listing: bool,
+def process_directory(dirpath: str, sel_streams: str, out: str,
+                      sel_lang: str, ocr_lang: str, par: str, listing: bool,
                       first_each: bool, force: bool, workdir: str,
                       debug: bool, assume_yes: bool, vtype: str) -> None:
     """Scan a directory for .mkv files and process their subtitle tracks.
@@ -2243,7 +2358,8 @@ def process_directory(dirpath: str, stream: str, out: str, sel_lang: str,
 
     Args:
         dirpath: Directory to scan recursively.
-        stream: Positional stream index applied to every file, or "".
+        sel_streams: Comma-separated -s stream indices applied to every
+            file, or "".
         out: Directory that receives each SRT file, or "".
         sel_lang: Value of -l, or "".
         ocr_lang: Value of --tesseract-language, or "".
@@ -2258,12 +2374,14 @@ def process_directory(dirpath: str, stream: str, out: str, sel_lang: str,
     """
     if listing:
         die("-L/--list cannot be combined with a directory")
+    if out and out.lower().endswith(".srt"):
+        die(f"-o must be a directory in directory mode, got: {out}")
     if not (par.isdigit() and int(par) >= 1):
         die(f"-j must be a positive number, got: {par}")
     par = int(par)
     if first_each:
-        if stream:
-            die(f"-1 cannot be combined with a stream index: {stream}")
+        if sel_streams:
+            die(f"-1 cannot be combined with -s: {sel_streams}")
         if sel_lang:
             die(f"-1 cannot be combined with -l: {sel_lang}")
         if ocr_lang:
@@ -2286,21 +2404,62 @@ def process_directory(dirpath: str, stream: str, out: str, sel_lang: str,
         entries.append((path, codec, streams, video_duration_hms(probe)))
 
     if vtype:
+        no_files = f"no mkv files in {dirpath} match --type {vtype}"
+    else:
+        no_files = f"no mkv files found in {dirpath}"
+    run_entries(entries, [], prompt=True, assume_yes=assume_yes, vtype=vtype,
+                no_files_msg=no_files, sel_streams=sel_streams, out=out,
+                sel_lang=sel_lang, ocr_lang=ocr_lang, par=par,
+                first_each=first_each, force=force, workdir=workdir,
+                debug=debug)
+
+
+def run_entries(entries: list[tuple[str, str, list[dict], str]],
+                input_errors: list[tuple[str, str]], prompt: bool,
+                assume_yes: bool, vtype: str, no_files_msg: str,
+                sel_streams: str, out: str, sel_lang: str, ocr_lang: str,
+                par: int, first_each: bool, force: bool, workdir: str,
+                debug: bool) -> None:
+    """Filter, list, confirm, and process probed files, then summarize.
+
+    Applies --type, lists the files (with their primary video codec), asks
+    for confirmation when prompt is True (unless assume_yes), processes
+    every file with process_file, and prints the final done/summary lines.
+
+    Args:
+        entries: (path, primary video codec, ffprobe streams, video
+            duration as HH:MM:SS) tuples, already probed.
+        input_errors: (path, message) for inputs that could not be
+            processed at all (missing, not an mkv file, ffprobe failure);
+            reported in the final summary.
+        prompt: Whether to ask for confirmation before processing.
+        assume_yes: Skip the confirmation prompt.
+        vtype: Value of --type (comma-separated criteria), or "".
+        no_files_msg: Printed when nothing is left to process.
+        sel_streams: Comma-separated -s stream indices, or "".
+        out: Output directory for SRT files, or "".
+        sel_lang: Value of -l, or "".
+        ocr_lang: Value of --tesseract-language, or "".
+        par: tesseract parallelism.
+        first_each: True if -1 was given.
+        force: Overwrite existing SRT outputs.
+        workdir: Base directory for temporary workdirs.
+        debug: Keep the temporary workdirs.
+    """
+    if vtype:
         entries = [(p, c, s, d) for p, c, s, d in entries
                    if type_matches(vtype, s)]
 
-    if not entries:
-        if vtype:
-            print(f"no mkv files in {dirpath} match --type {vtype}")
-        else:
-            print(f"no mkv files found in {dirpath}")
+    if not entries and not input_errors:
+        print(no_files_msg)
         sys.exit(0)
 
-    print(f"found {len(entries)} mkv file(s):")
-    for path, codec, _streams, _dur in entries:
-        print(f"  {codec or 'unknown'}  {path}")
+    if entries:
+        print(f"found {len(entries)} mkv file(s):")
+        for path, codec, _streams, _dur in entries:
+            print(f"  {codec or 'unknown'}  {path}")
 
-    if not assume_yes:
+    if prompt and entries and not assume_yes:
         try:
             ans = input(f"Process all {len(entries)} file(s)? [y/N] ")
         except EOFError:
@@ -2315,23 +2474,114 @@ def process_directory(dirpath: str, stream: str, out: str, sel_lang: str,
         os.makedirs(out, exist_ok=True)
 
     m = len(entries)
-    n_err = 0
-    errors: list[tuple[str, list[str]]] = []
+    n_err = len(input_errors)
+    errors: list[tuple[str, list[str]]] = [
+        (path, [msg]) for path, msg in input_errors]
     t0 = time.time()
     for i, (path, _codec, streams, video_dur) in enumerate(entries, 1):
         print(f"\nProcessing file {i}/{m} : {path}")
-        errs = process_file(path, streams, video_dur, stream, sel_lang,
+        errs = process_file(path, streams, video_dur, sel_streams, sel_lang,
                             first_each, out, ocr_lang, par, force, workdir,
                             debug)
         if errs:
             n_err += 1
             errors.append((path, errs))
 
-    print(f"\ndone: {m - n_err} ok, {n_err} error(s) of {m} file(s)")
+    total = m + len(input_errors)
+    print(f"\ndone: {total - n_err} ok, {n_err} error(s) of {total} file(s)")
     for path, errs in errors:
         print(f"  {os.path.abspath(path)}: error: {'; '.join(errs)}")
     print(f"\nprocessed {m} file(s) in {_fmt_dur(int(time.time() - t0))}")
     sys.exit(1 if n_err else 0)
+
+
+def process_multiple(paths: list[str], sel_streams: str, out: str,
+                     sel_lang: str, ocr_lang: str, par: str, first_each: bool,
+                     force: bool, workdir: str, debug: bool, assume_yes: bool,
+                     vtype: str) -> None:
+    """Process several MKV files and/or directories, in command-line order.
+
+    Explicit files are taken as given: a missing one or a file without a
+    .mkv extension is reported in the final summary and the rest are still
+    processed. Directories are scanned recursively (hidden directories
+    skipped), like in directory mode. The y/N prompt is shown only when at
+    least one directory is given (-y skips it). -o, when given, must be
+    the directory that receives each SRT file.
+
+    Args:
+        paths: The positional arguments (files and/or directories).
+        sel_streams: Comma-separated -s stream indices applied to every
+            file, or "".
+        out: Directory that receives each SRT file, or "".
+        sel_lang: Value of -l, or "".
+        ocr_lang: Value of --tesseract-language, or "".
+        par: tesseract parallelism.
+        first_each: True if -1 was given.
+        force: Overwrite existing SRT outputs.
+        workdir: Base directory for temporary workdirs.
+        debug: Keep the temporary workdirs.
+        assume_yes: Skip the confirmation prompt.
+        vtype: Value of --type, or "".
+    """
+    if out and out.lower().endswith(".srt"):
+        die(f"-o must be a directory when processing multiple files and "
+            f"directories, got: {out}")
+    if not (par.isdigit() and int(par) >= 1):
+        die(f"-j must be a positive number, got: {par}")
+    par = int(par)
+    if first_each:
+        if sel_streams:
+            die(f"-1 cannot be combined with -s: {sel_streams}")
+        if sel_lang:
+            die(f"-1 cannot be combined with -l: {sel_lang}")
+        if ocr_lang:
+            die(f"-1 cannot be combined with --tesseract-language: {ocr_lang}")
+
+    input_errors: list[tuple[str, str]] = []
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for path in paths:
+        if os.path.isdir(path):
+            found = find_mkvs(path)
+        elif os.path.isfile(path):
+            if path.lower().endswith(".mkv"):
+                found = [path]
+            else:
+                input_errors.append((path, "not an mkv file"))
+                continue
+        else:
+            input_errors.append((path, "file not found"))
+            continue
+        for mkv in found:
+            key = os.path.realpath(mkv)
+            if key not in seen:
+                seen.add(key)
+                candidates.append(mkv)
+
+    entries = []
+    for path in candidates:
+        try:
+            raw = run_captured(
+                ["ffprobe", "-v", "error", "-show_streams", "-show_entries",
+                 "format=duration", "-of", "json", path], batch=True)
+        except TrackError as e:
+            input_errors.append((path, str(e)))
+            continue
+        probe = json.loads(raw)
+        streams = probe.get("streams", [])
+        video = next((s for s in streams
+                      if s.get("codec_type") == "video"), None)
+        codec = (video or {}).get("codec_name", "")
+        entries.append((path, codec, streams, video_duration_hms(probe)))
+
+    no_files = (f"no mkv files in the given paths match --type {vtype}"
+                if vtype else "no mkv files found in the given paths")
+    run_entries(entries, input_errors,
+                prompt=any(os.path.isdir(p) for p in paths),
+                assume_yes=assume_yes, vtype=vtype, no_files_msg=no_files,
+                sel_streams=sel_streams, out=out, sel_lang=sel_lang,
+                ocr_lang=ocr_lang, par=par, first_each=first_each,
+                force=force, workdir=workdir, debug=debug)
 
 
 if __name__ == "__main__":

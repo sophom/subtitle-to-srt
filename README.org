@@ -77,13 +77,22 @@ stream  language  codec          duration
 Extract one of them by stream index:
 
 #+begin_example
-$ ./subtitle-to-srt.py "The Score.mkv" 2
+$ ./subtitle-to-srt.py "The Score.mkv" -s 2
 #+end_example
 
 The result is written next to the MKV, named after the file and the 2-letter
 language code of the extracted track: =The Score.en.srt=. If the track's
 language tag is a legacy alias (e.g. =ger=), the original tag is kept in the
 file name instead: =The Phantom of the Opera.ger.srt=.
+
+Several streams at once: separate the indices with commas. Each gets its own
+file with the index in the name (the language stays right before the
+extension), e.g. =The Score.2.en.srt= and =The Score.3.fre.srt=; =-o= then
+names the directory that receives them:
+
+#+begin_example
+$ ./subtitle-to-srt.py "The Score.mkv" -s 2,3
+#+end_example
 
 Or select by language instead of index:
 
@@ -120,16 +129,15 @@ stream  language  codec          duration
 Here #4/#5 run the full 01:51:34 (the feature); #6–#9 stop at 01:51:20
 (extras). Pick by index, or use =-l= to take the first matching track:
 
-| Option              | Meaning                                                                       |
-|---------------------+-------------------------------------------------------------------------------|
-| 4 = positional      | extract subtitle stream #4                                                    |
+| Option             | Meaning                                                                       |
+|--------------------+-------------------------------------------------------------------------------|
+| =-s 4=             | extract subtitle stream #4 (several: =-s 4,5=)                                |
 | =-l eng= / =-l spa= | extract the first subtitle track with that language (2- or 3-letter ISO code) |
-| =4 -l spa=          | both given: the stream index wins                                             |
-| (neither)           | default-flagged track, else first English, else first subtitle track          |
-| =-1=                | extract the first track of *each* language to a separate SRT                  |
-#+TBLFM: $1=4= (positional)
+| =-s 4 -l spa=      | both given: =-s= wins                                                         |
+| (neither)          | default-flagged track, else first English, else first subtitle track          |
+| =-1=               | extract the first track of *each* language to a separate SRT                  |
 
-=-1= cannot be combined with a stream index, =-l=, or =--tesseract-language=.
+=-1= cannot be combined with =-s=, =-l=, or =--tesseract-language=.
 Tagged English is preferred; if the file has no tagged English track, the
 first untagged track is assumed to be English (with a warning).
 
@@ -137,7 +145,8 @@ first untagged track is assumed to be English (with a warning).
 
 | Option                      | Description                                                                                                                        |
 |-----------------------------+------------------------------------------------------------------------------------------------------------------------------------|
-| =-o out.srt=                | output path (default =<mkv name>.<lang>.srt=); in directory mode: the directory that receives each SRT                             |
+| =-s streams=                | one or more comma-separated stream indices (e.g. =-s 7= or =-s 7,12=); several write =<name>.<index>.<lang>.srt= per stream |
+| =-o out.srt=                | output path (default =<mkv name>.<lang>.srt=); with several =-s= values or in directory mode: the directory that receives each SRT |
 | =-l lang=                   | extract the first subtitle stream matching LANG                                                                                    |
 | =-1=                        | first subtitle stream per language, one SRT each                                                                                   |
 | =--tesseract-language lang= | force the OCR language (default: the track's language tag)                                                                         |
@@ -159,7 +168,7 @@ with the codec of their primary video stream, asks for confirmation, and
 processes each one with the same track selection and options:
 
 #+begin_example
-$ ./subtitle-to-srt.py /path/to/movies 7 -y
+$ ./subtitle-to-srt.py /path/to/movies -s 7 -y
 found 3 mkv file(s):
   vc1    /path/to/movies/Atonement (2007).mkv
   vc1    /path/to/movies/Darkman (1990).mkv
@@ -172,8 +181,8 @@ done: 3 ok, 0 error(s) of 3 file(s)
 processed 3 file(s) in 5:03
 #+end_example
 
-- A stream index or =-l= applies to every file; a file without that subtitle
-  track is reported and skipped.
+- The =-s= stream indices (or =-l=) apply to every file; a file without one
+  of them is reported and the rest are processed.
 - =-o OUTDIR= is the directory that receives each SRT (created if missing);
   without it, each SRT is written next to its MKV.
 - =--type criteria= limits the list; all comma-separated criteria must
@@ -218,7 +227,7 @@ $ ./subtitle-to-srt.py --learn es,en movie.es.srt movie.en.srt
 # -> movie.es-en.srt
 #+end_example
 
-=-l=, =-1=, =-L=, =--tesseract-language=, and a stream index cannot be
+=-s=, =-l=, =-1=, =-L=, and =--tesseract-language= cannot be
 combined with =--learn=.
 
 * Output and timing
