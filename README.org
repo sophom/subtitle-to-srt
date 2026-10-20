@@ -23,7 +23,7 @@ HDDVD mkvs. This script started as a quick and dirty bash script but
 it evolved into this. I'm releasing it here in case others have use
 for it.
 
-One of my favorite features is --learn which creates subtitles with
+One of my favorite features is =--learn= which creates subtitles with
 two languages displayed simultaneously. I did this to help me get
 comfortable with a language I'm learning while watching movies. I set
 it so that the language I'm learning is on top while the base
@@ -234,6 +234,9 @@ combined with =--learn=.
   skipped.
 - English output: tesseract's characteristic misread of =I am= as =lam= is
   normalized back to =I am= (word boundary).
+- A =| or a standalone =/= misread from =I= is normalized to =I= in all
+  output. A =/= next to a letter or digit (=and/or=, =1/2=, dates) is left
+  alone; a surviving contraction suffix becomes e.g. =I'm=.
 - An existing output file is skipped with a message; pass =-f= to overwrite.
 - The OCR phase prints progress with an ETA:
   =OCR: 412/998 (41%)  ETA 0:58=.

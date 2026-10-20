@@ -1027,6 +1027,27 @@ def run_tesseract(crops_dir: str, n_crops: int, ocr_lang: str, par: int,
     sys.stdout.flush()
 
 
+def fix_ocr_misreads(text: str) -> str:
+    """Fix tesseract's glyph misreads of the letter I.
+
+    A "|" is always replaced with "I". A "/" is replaced only when it is
+    not adjacent to a letter or digit (protecting real slashes such as
+    "and/or", "1/2", and dates); the only letters that can follow a
+    misread standalone I are contraction suffixes, so "/m", "/ll",
+    "/ve", and "/d" become "I'm", "I'll", "I've", and "I'd" (the
+    apostrophe tesseract dropped is restored).
+
+    Args:
+        text: Raw OCR text, possibly multi-line.
+
+    Returns:
+        The text with the misread characters fixed.
+    """
+    text = text.replace("|", "I")
+    text = re.sub(r"(?<!\w)/(m|ll|ve|d)(?!\w)", r"I'\1", text)
+    return re.sub(r"(?<!\w)/(?!\w)", "I", text)
+
+
 def write_srt(work: str, n: int, out: str, batch: bool = False,
               english: bool = False) -> int:
     """Assemble the SRT from start times, durations, and OCR text.
@@ -1102,8 +1123,8 @@ def write_srt(work: str, n: int, out: str, batch: bool = False,
         tf = f"{work}/crops/{i + 1:04d}.txt"
         text = ""
         if os.path.exists(tf):
-            text = Path(tf).read_text(
-                errors="replace").strip().replace("|", "I")
+            text = fix_ocr_misreads(Path(tf).read_text(
+                errors="replace").strip())
             if english:
                 text = re.sub(r"\blam\b", "I am", text)
         if pgs and not text:
@@ -1396,7 +1417,7 @@ def write_learn_srt(out: str, entries: list[tuple[int, int, str]]) -> int:
     """
     with open(out, "w") as f:
         for i, (start, end, text) in enumerate(entries, 1):
-            text = text.replace("|", "I")
+            text = fix_ocr_misreads(text)
             f.write(f"{i}\n{fmt_srt_ms(start)} --> {fmt_srt_ms(end)}\n"
                     f"{text}\n\n")
     print(f"{len(entries)} entries written to {out}")
